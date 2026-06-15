@@ -75,13 +75,23 @@ def generate_html(events, output_path="/data/ai/tmp/catalyst.html"):
 
 
 def build_page(stats, by_type, resonance_days, week_events, week_str, month_str, now):
+    # Generate dynamic calendar icon with current day
+    day_num = now.day
+    # Cute SVG definition
+    CAL_SVG = f'<svg viewBox="0 0 32 32" width="48" height="48" xmlns="http://www.w3.org/2000/svg"><rect x="2" y="6" width="28" height="24" rx="4" fill="#6366f1"/><rect x="2" y="6" width="28" height="8" fill="#4f46e5"/><circle cx="9" cy="10" r="1.5" fill="#f43f5e"/><circle cx="23" cy="10" r="1.5" fill="#f43f5e"/><text x="16" y="25" font-family="sans-serif" font-size="14" font-weight="bold" fill="white" text-anchor="middle">{day_num}</text></svg>'
+    
+    # Favicon Base64 version for Chrome
+    FAV_SVG = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect x="2" y="6" width="28" height="24" rx="4" fill="#6366f1"/><rect x="2" y="6" width="28" height="8" fill="#4f46e5"/><circle cx="9" cy="10" r="1.5" fill="#f43f5e"/><circle cx="23" cy="10" r="1.5" fill="#f43f5e"/><text x="16" y="25" font-family="sans-serif" font-size="14" font-weight="bold" fill="white" text-anchor="middle">{day_num}</text></svg>'
+    import base64
+    FAV_B64 = base64.b64encode(FAV_SVG.encode()).decode()
+    
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>market-catalyst</title>
-    <link rel="icon" type="image/svg+xml" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="10" y="20" width="80" height="70" rx="10" fill="%236366f1"/><rect x="10" y="10" width="80" height="20" fill="%23818cf8"/><circle cx="30" cy="20" r="5" fill="white"/><circle cx="70" cy="20" r="5" fill="white"/><text x="50" y="65" font-family="sans-serif" font-size="40" fill="white" text-anchor="middle">1</text></svg>'>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,{FAV_B64}">
     <style>{CSS}</style>
 </head>
 <body>
@@ -97,7 +107,7 @@ def build_page(stats, by_type, resonance_days, week_events, week_str, month_str,
     </div>
 
     <div class="header">
-        <h1><a href="https://github.com/aixuedegege/market-catalyst" target="_blank" class="title-link"><svg style="width:48px;height:48px;vertical-align:middle" viewBox="0 0 100 100"><rect x="10" y="20" width="80" height="70" rx="10" fill="#6366f1"/><rect x="10" y="10" width="80" height="20" fill="#818cf8"/><circle cx="30" cy="20" r="5" fill="white"/><circle cx="70" cy="20" r="5" fill="white"/><text x="50" y="65" font-family="sans-serif" font-size="40" fill="white" text-anchor="middle">1</text></svg> market-catalyst</a></h1>
+        <h1><a href="https://github.com/aixuedegege/market-catalyst" target="_blank" class="title-link">{CAL_SVG} market-catalyst</a></h1>
         <div class="subtitle">Macro · Crypto · Equities · Politics</div>
         <div class="update-time">Updated: {now.strftime('%Y-%m-%d %H:%M UTC')} | Sources: BLS/BEA/Fed/Tokenomist</div>
     </div>
