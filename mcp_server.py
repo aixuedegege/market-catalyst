@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """
-Market Catalyst MCP Server — FastMCP HTTP mode
-Provides ALL data visible on the frontend as structured MCP tools.
+Market Catalyst MCP Server — FastMCP SSE mode
+Serves MCP tools via SSE (Server-Sent Events) for compatibility with
+Copilot SDK, Cursor, and other SSE-based MCP clients.
 
-Run:
-  /tmp/mcp_venv/bin/python3 /data/ai/tmp/mcp_server_fast.py --host 127.0.0.1 --port 17003
+Endpoints:
+  GET  /mcp/sse      → SSE stream (sends event: endpoint, then event: message)
+  POST /mcp/messages → Receive JSON-RPC requests from clients
 
-Client config (Cursor / Claude Desktop):
+Client config (Cursor / Claude Desktop / Copilot SDK):
 {
   "mcpServers": {
     "market-catalyst": {
-      "url": "https://catalyst.infodream.asia/mcp"
+      "url": "https://catalyst.infodream.asia/mcp/sse"
     }
   }
 }
@@ -33,8 +35,6 @@ mcp = FastMCP(
     debug=False,
     host="127.0.0.1",
     port=17003,
-    streamable_http_path="/mcp",
-    stateless_http=True,
 )
 
 
@@ -59,7 +59,6 @@ def get_future_events(events, days=30):
 
 
 def classify_impact(impact_str):
-    """Classify impact level: critical, high, medium, low"""
     if "极高" in impact_str or "Extremely High" in impact_str:
         return "critical"
     if "High" in impact_str or "高" in impact_str:
@@ -88,11 +87,9 @@ def get_catalyst_stats(days: int = 30) -> str:
     events = load_events()
     days = min(max(days, 1), 30)
     future = get_future_events(events, days)
-
     now = datetime.now(timezone.utc)
     week_cutoff = (now + timedelta(days=7)).strftime("%Y-%m-%d")
     month_cutoff = (now + timedelta(days=30)).strftime("%Y-%m-%d")
-
     stats = {
         "total": len(future),
         "this_week": len([e for e in future if e.get("date", "")[:10] <= week_cutoff]),
@@ -100,36 +97,28 @@ def get_catalyst_stats(days: int = 30) -> str:
         "critical": len([e for e in future if classify_impact(e.get("impact_analysis", "")) == "critical"]),
         "high": len([e for e in future if classify_impact(e.get("impact_analysis", "")) == "high"]),
         "by_type": {},
-        "data_updated_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
-
     by_type = defaultdict(int)
     for e in future:
-        t = e.get("type", "Other")
-        by_type[t] += 1
+        by_type[e.get("type", "Other")] += 1
     stats["by_type"] = dict(by_type)
-
     lines = [
         f"📊 Catalyst Dashboard Stats (next {days} days)",
-        f"  Total events: {stats['total']}",
+        f"  Total: {stats['total']}",
         f"  This week (7d): {stats['this_week']}",
         f"  This month (30d): {stats['this_month']}",
-        f"  Critical (极高): {stats['critical']}",
-        f"  High (高): {stats['high']}",
-        f"  Data updated: {stats['data_updated_at']}",
-        "",
-        "Events by type:",
+        f"  Critical: {stats['critical']}",
+        f"  High: {stats['high']}",
+        "", "Events by type:",
     ]
-    for t, count in sorted(by_type.items(), key=lambda x: -x[1]):
-        lines.append(f"  {t}: {count}")
-
+    for t, c in sorted(by_type.items(), key=lambda x: -x[1]):
+        lines.append(f"  {t}: {c}")
     return "\n".join(lines)
 
 
 @mcp.tool()
 def get_resonance_days(days: int = 7) -> str:
-    """Find resonance days — dates with 3 or more high-impact events overlapping.
-    Mirrors the 'Resonance' section on the frontend.
+    """Find resonance days — dates with 3+ high-impact events overlapping.
 
     Args:
         days: Days ahead to scan (default: 7, max: 30)
@@ -137,135 +126,95 @@ def get_resonance_days(days: int = 7) -> str:
     events = load_events()
     days = min(max(days, 1), 30)
     future = get_future_events(events, days)
-
-    # Group high+ events by date
     date_events = defaultdict(list)
     for e in future:
-        level = classify_impact(e.get("impact_analysis", ""))
-        if level in ("critical", "high"):
-            date_str = e.get("date", "")[:10]
-            date_events[date_str].append(e)
-
-    # Find dates with 3+ overlapping high-impact events
+        if classify_impact(e.get("impact_analysis", "")) in ("critical", "high"):
+            date_events[e.get("date", "")[:10]].append(e)
     resonance = []
     for date_str, evts in sorted(date_events.items()):
         if len(evts) >= 3:
-            resonance.append({
-                "date": date_str,
-                "count": len(evts),
-                "events": [
-                    {"title": e["title"], "impact": e["impact_analysis"], "asset_impact": e.get("asset_impact", "")}
-                    for e in evts
-                ],
-            })
-
+            resonance.append({"date": date_str, "count": len(evts),
+                "events": [{"title": e["title"], "impact": e["impact_analysis"]} for e in evts]})
     if not resonance:
-        return f"⚠️ Resonance scan (next {days} days): No days with 3+ overlapping high-impact events found."
-
-    lines = [f"⚠️ Resonance Days (next {days} days) — {len(resonance)} date(s) with overlapping events:", ""]
+        return f"⚠️ No resonance days found in next {days} days."
+    lines = [f"⚠️ Resonance Days (next {days} days) — {len(resonance)} date(s):", ""]
     for r in resonance:
-        lines.append(f"📅 {r['date']} — {r['count']} events overlapping:")
+        lines.append(f"📅 {r['date']} — {r['count']} events:")
         for ev in r["events"]:
-            lines.append(f"  • {ev['title']} | Impact: {ev['impact']}")
+            lines.append(f"  • {ev['title']} | {ev['impact']}")
         lines.append("")
-
     return "\n".join(lines)
 
 
 @mcp.tool()
 def get_events_by_type(days: int = 7, type_filter: str = "all") -> str:
-    """Get events grouped by category (Macro, Earnings, IPO, etc.) — mirrors the frontend category sections.
+    """Get events grouped by category (Macro, Earnings, IPO, etc.).
 
     Args:
-        days: Days ahead to fetch (default: 7, max: 30)
-        type_filter: Filter by event type name (e.g., 'Macro', 'Earnings'), or 'all' for all types
+        days: Days ahead (default: 7, max: 30)
+        type_filter: Filter by type name or 'all'
     """
     events = load_events()
     days = min(max(days, 1), 30)
     future = get_future_events(events, days)
-
     by_type = defaultdict(list)
     for e in future:
-        t = e.get("type", "Other")
-        by_type[t].append(e)
-
+        by_type[e.get("type", "Other")].append(e)
     if type_filter.lower() != "all":
-        matched_types = [t for t in by_type if type_filter.lower() in t.lower()]
-        if matched_types:
-            by_type = {t: by_type[t] for t in matched_types}
+        matched = [t for t in by_type if type_filter.lower() in t.lower()]
+        if matched:
+            by_type = {t: by_type[t] for t in matched}
         else:
-            return f"No event type matching '{type_filter}'. Available types: {', '.join(sorted(by_type.keys()))}"
-
+            return f"No type matching '{type_filter}'. Available: {', '.join(sorted(by_type.keys()))}"
     lines = [f"📂 Events by Category (next {days} days):", ""]
-    for t in sorted(by_type.keys()):
+    for t in sorted(by_type):
         evts = sorted(by_type[t], key=lambda x: x.get("date", ""))
         lines.append(f"## {t} ({len(evts)} events)")
         for e in evts:
-            date_part = e.get("date", "")[:10]
-            time_part = e.get("date", "")[11:16] if len(e.get("date", "")) > 11 else ""
             level = classify_impact(e.get("impact_analysis", ""))
-            lines.append(
-                f"  [{level.upper()}] {date_part} {time_part} | {e['title']} | "
-                f"Impact: {e['impact_analysis']} | Assets: {e.get('asset_impact', '')}"
-            )
+            lines.append(f"  [{level.upper()}] {e['date'][:10]} {e['date'][11:16] if len(e['date'])>11 else ''} | {e['title']} | {e['impact_analysis']} | {e.get('asset_impact','')}")
         lines.append("")
-
     return "\n".join(lines)
 
 
 @mcp.tool()
 def get_catalyst_events(days: int = 7, impact: str = "all") -> str:
     """Fetch upcoming macroeconomic catalyst events with full details.
-    Mirrors the main event list on the frontend.
 
     Args:
-        days: Days ahead to fetch (default: 7, max: 30)
-        impact: Filter level — 'all', 'high', 'medium', or 'critical'
+        days: Days ahead (default: 7, max: 30)
+        impact: 'all', 'high', 'medium', or 'critical'
     """
     events = load_events()
     days = min(max(days, 1), 30)
     future = get_future_events(events, days)
-
     if impact != "all":
         future = [e for e in future if classify_impact(e.get("impact_analysis", "")) == impact]
-
-    lines = [f"Found {len(future)} catalyst events in the next {days} days.", ""]
+    lines = [f"Found {len(future)} events in next {days} days.", ""]
     for i, e in enumerate(future, 1):
-        date_part = e.get("date", "")[:10]
-        time_part = e.get("date", "")[11:16] if len(e.get("date", "")) > 11 else ""
         level = classify_impact(e.get("impact_analysis", ""))
-        lines.append(
-            f"{i}. [{level.upper()}] {date_part} {time_part} | {e['title']} | "
-            f"Impact: {e['impact_analysis']} | Assets: {e.get('asset_impact', '')} | "
-            f"Type: {e.get('type', '')} | Source: {e.get('source', '')}"
-        )
+        lines.append(f"{i}. [{level.upper()}] {e['date'][:10]} {e['date'][11:16] if len(e['date'])>11 else ''} | {e['title']} | {e['impact_analysis']} | {e.get('asset_impact','')} | {e.get('type','')} | {e.get('source','')}")
     if not future:
-        lines.append("No events found for the specified criteria.")
+        lines.append("No events found.")
     return "\n".join(lines)
 
 
 @mcp.tool()
 def search_catalyst_events(query: str, days: int = 30) -> str:
-    """Search catalyst events by keyword (e.g., 'CPI', 'FOMC', 'NFP', 'Fed').
-    Case-insensitive search in title and type fields.
+    """Search catalyst events by keyword (e.g., 'CPI', 'FOMC', 'NFP').
 
     Args:
         query: Search keyword (case-insensitive)
-        days: Days ahead to search within (default: 30, max: 30)
+        days: Days ahead (default: 30, max: 30)
     """
     events = load_events()
     query = query.lower().strip()
     if not query:
         return "Error: 'query' parameter is required."
-
     days = min(max(days, 1), 30)
     future = get_future_events(events, days)
-    matched = [
-        e for e in future
-        if query in e.get("title", "").lower() or query in e.get("type", "").lower()
-    ]
-
-    lines = [f"Found {len(matched)} events matching '{query}' in the next {days} days.", ""]
+    matched = [e for e in future if query in e.get("title", "").lower() or query in e.get("type", "").lower()]
+    lines = [f"Found {len(matched)} events matching '{query}' in next {days} days.", ""]
     for i, e in enumerate(matched, 1):
         lines.append(f"{i}. {fmt_event(e)}")
     if not matched:
@@ -274,16 +223,7 @@ def search_catalyst_events(query: str, days: int = 30) -> str:
 
 
 if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=17003)
-    args = parser.parse_args()
-
-    mcp._host = args.host
-    mcp._port = args.port
-
-    print(f"[*] Market Catalyst MCP Server starting on http://{args.host}:{args.port}/mcp")
-    print(f"[*] Streamable HTTP endpoint: /mcp")
-    print(f"[*] Tools: get_catalyst_stats, get_resonance_days, get_events_by_type, get_catalyst_events, search_catalyst_events")
-    mcp.run(transport="streamable-http")
+    print("[*] Market Catalyst MCP Server (SSE mode)")
+    print("[*] GET  /mcp/sse      → SSE stream")
+    print("[*] POST /mcp/messages → JSON-RPC endpoint")
+    mcp.run(transport="sse", mount_path="/mcp")
