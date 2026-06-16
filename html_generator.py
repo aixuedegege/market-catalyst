@@ -205,7 +205,12 @@ data = resp.json()
 &#125;</code>
             </div>
             <p style="color:var(--text-secondary);font-size:0.8rem;margin-top:8px;">
-                Tools: <code>get_catalyst_events</code> (filter by days/impact) · <code>search_catalyst_events</code> (keyword: CPI, FOMC, NFP…)
+                <strong>5 Tools:</strong>
+                <code>get_catalyst_stats</code> (stats cards) ·
+                <code>get_resonance_days</code> (overlapping events) ·
+                <code>get_events_by_type</code> (category filter) ·
+                <code>get_catalyst_events</code> (full list) ·
+                <code>search_catalyst_events</code> (keyword search)
             </p>
 
             <div class="api-info">

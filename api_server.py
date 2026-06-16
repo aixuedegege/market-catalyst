@@ -156,23 +156,39 @@ class CatalystAPIHandler(BaseHTTPRequestHandler):
         future = [e for e in events if e.get("date", "")[:10] >= now]
         future.sort(key=lambda x: x.get("date", ""))
 
+        def classify_impact(impact_str):
+            if "极高" in impact_str or "Extremely High" in impact_str:
+                return "critical"
+            if "High" in impact_str or "高" in impact_str:
+                return "high"
+            return "other"
+
         stats = {
             "total": len(future),
             "week": len([e for e in future if e.get("date", "")[:10] <= week_cutoff]),
             "month": len([e for e in future if e.get("date", "")[:10] <= month_cutoff]),
-            "critical": len([e for e in future if "极高" in e.get("impact_analysis", "")]),
-            "high": len([e for e in future if "高" in e.get("impact_analysis", "") and "极高" not in e.get("impact_analysis", "")]),
+            "critical": len([e for e in future if classify_impact(e.get("impact_analysis", "")) == "critical"]),
+            "high": len([e for e in future if classify_impact(e.get("impact_analysis", "")) == "high"]),
         }
+
+        # Resonance: days with 3+ high/critical events
+        from collections import defaultdict
+        date_high = defaultdict(int)
+        for e in future:
+            if classify_impact(e.get("impact_analysis", "")) in ("critical", "high"):
+                date_high[e.get("date", "")[:10]] += 1
+        resonance_days = [{"date": d, "count": c} for d, c in sorted(date_high.items()) if c >= 3]
 
         response = {
             "code": 0,
             "message": "success",
             "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "stats": stats,
+            "resonance": resonance_days,
             "data": future,
             "meta": {
-                "source": "BLS/BEA/Fed/Tokenomist/官方日历",
-                "update_frequency": "每小时自动更新",
+                "source": "Finnhub (BLS/BEA/Fed)",
+                "update_frequency": "every hour",
                 "rate_limit": "5 requests/hour per IP",
                 "your_remaining": rate_limiter.get_remaining(client_ip)
             }
