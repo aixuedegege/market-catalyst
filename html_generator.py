@@ -191,22 +191,21 @@ data = resp.json()
 
             <h4>MCP Server Config</h4>
             <p style="color:var(--text-muted);font-size:0.85rem;margin-bottom:12px;">
-                Add this to Cursor (<code>.cursor/mcp.json</code>) or Claude Desktop config.
-                The server runs locally via stdio JSON-RPC — no network needed.
+                Add to Cursor (<code>.cursor/mcp.json</code>), Claude Desktop, or any MCP client.
+                Uses FastMCP Streamable HTTP — connects directly to the live API.
             </p>
             <div class="curl-example">
                 <button class="copy-btn" onclick="copyCurl(this)">📋 Copy</button>
                 <code>&#123;
   &quot;mcpServers&quot;: &#123;
-    &quot;catalyst-calendar&quot;: &#123;
-      &quot;command&quot;: &quot;python3&quot;,
-      &quot;args&quot;: [&quot;/data/ai/tmp/catalyst_mcp_server.py&quot;]
+    &quot;market-catalyst&quot;: &#123;
+      &quot;url&quot;: &quot;https://catalyst.infodream.asia/mcp&quot;
     &#125;
   &#125;
 &#125;</code>
             </div>
             <p style="color:var(--text-secondary);font-size:0.8rem;margin-top:8px;">
-                Available tools: <code>get_catalyst_events</code> (filter by days/impact) · <code>search_catalyst_events</code> (keyword search)
+                Tools: <code>get_catalyst_events</code> (filter by days/impact) · <code>search_catalyst_events</code> (keyword: CPI, FOMC, NFP…)
             </p>
 
             <div class="api-info">
