@@ -217,7 +217,7 @@ data = resp.json()
                 <ul>
                     <li><span class="tag">GET</span> <code>/api/v1/events</code> — All future catalyst events</li>
                     <li><span class="tag">GET</span> <code>/api/health</code> — Service health check</li>
-                    <li><span class="tag">Rate Limit</span> Max 5 requests/hour per IP</li>
+                    <li><span class="tag">Rate Limit</span> Max 100 requests/hour per IP</li>
                     <li><span class="tag">Format</span> JSON with stats + data + meta</li>
                     <li><span class="tag">Refresh</span> Data updates automatically every hour</li>
                 </ul>

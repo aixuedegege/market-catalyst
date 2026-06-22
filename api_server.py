@@ -87,7 +87,7 @@ class RateLimiter:
             recent = [t for t in self.requests[client_ip] if now - t < self.window_seconds]
             return max(0, self.max_requests - len(recent))
 
-rate_limiter = RateLimiter(max_requests=5, window_seconds=3600)
+rate_limiter = RateLimiter(max_requests=100, window_seconds=3600)
 
 class VisitDeduplicator:
     """Prevent visit spam: only count 1 visit per IP per 30 mins"""
@@ -119,9 +119,9 @@ class CatalystAPIHandler(BaseHTTPRequestHandler):
             allowed, wait = rate_limiter.is_allowed(client_ip)
             if not allowed:
                 self.send_json({
-                    "error": "速率限制：每小时最多 5 次请求",
+                    "error": "速率限制：每小时最多 100 次请求",
                     "retry_after_seconds": wait,
-                    "rate_limit": "5 requests/hour per IP"
+                    "rate_limit": "100 requests/hour per IP"
                 }, 429)
                 return
             self.handle_events(client_ip)
@@ -189,7 +189,7 @@ class CatalystAPIHandler(BaseHTTPRequestHandler):
             "meta": {
                 "source": "Finnhub (BLS/BEA/Fed)",
                 "update_frequency": "every hour",
-                "rate_limit": "5 requests/hour per IP",
+                "rate_limit": "100 requests/hour per IP",
                 "your_remaining": rate_limiter.get_remaining(client_ip)
             }
         }
@@ -200,7 +200,7 @@ class CatalystAPIHandler(BaseHTTPRequestHandler):
         self.send_json({
             "status": "ok",
             "time": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "rate_limit": "5 requests/hour per IP"
+            "rate_limit": "100 requests/hour per IP"
         })
     
     def handle_stats(self):
@@ -240,5 +240,5 @@ class CatalystAPIHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     server = HTTPServer(("127.0.0.1", 17002), CatalystAPIHandler)
     print("[*] Catalyst API running on http://127.0.0.1:17002")
-    print("[*] Rate limit: 5 requests/hour per IP")
+    print("[*] Rate limit: 100 requests/hour per IP")
     server.serve_forever()
