@@ -1,26 +1,19 @@
 #!/usr/bin/env python3
 """
-催化剂日历 - HTML生成器 (纯英文)
+催化剂日历 - HTML生成器 (SQLite 后端)
+支持: 未来事件 + 历史事件结果展示 + 历史回顾Tab
 """
 
 import json
-import hashlib
+import sqlite3
 import os
 import shutil
+import base64
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from collections import Counter
 
-def get_impact_level(impact_text):
-    t = impact_text.lower()
-    if "extremely high" in t:
-        return "critical"
-    elif "high" in t:
-        return "high"
-    elif "medium" in t:
-        return "medium"
-    return "low"
-
+DB_PATH = "/data/ai/tmp/catalyst.db"
 TYPE_ICONS = {
     "Political - Trump Policy": "🇺🇸",
     "Macro - Economic Data": "📈",
@@ -31,59 +24,111 @@ TYPE_ICONS = {
     "Crypto - News": "📰",
 }
 
-def generate_html(events, output_path="/data/ai/tmp/catalyst.html"):
+def get_events_from_db():
+    """从 SQLite 读取所有事件"""
+    if not os.path.exists(DB_PATH):
+        return [], []
+    
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    
+    # Future events
+    future_rows = conn.execute("""
+        SELECT * FROM events WHERE datetime_utc >= ? ORDER BY datetime_utc ASC
+    """, [now]).fetchall()
+    
+    # Past events (resolved and pending)
+    past_rows = conn.execute("""
+        SELECT * FROM events WHERE datetime_utc < ? ORDER BY datetime_utc DESC
+    """, [now]).fetchall()
+    
+    conn.close()
+    
+    future_events = [dict(r) for r in future_rows]
+    past_events = [dict(r) for r in past_rows]
+    
+    return future_events, past_events
+
+def get_impact_level(impact_text):
+    t = (impact_text or "").lower()
+    if "extremely high" in t:
+        return "critical"
+    elif "high" in t:
+        return "high"
+    elif "medium" in t:
+        return "medium"
+    return "low"
+
+def generate_html(output_path="/data/ai/tmp/catalyst.html"):
+    future_events, past_events = get_events_from_db()
+    
     now = datetime.now(timezone.utc)
     now_str = now.strftime("%Y-%m-%d")
     week_str = (now + timedelta(days=7)).strftime("%Y-%m-%d")
     month_str = (now + timedelta(days=30)).strftime("%Y-%m-%d")
-
-    future = [e for e in events if e["date"] >= now_str]
-    week_events = [e for e in future if e["date"] <= week_str]
-    month_list = [e for e in future if e["date"] <= month_str]
-
-    for e in future:
+    
+    # Add impact_level to all events
+    for e in future_events + past_events:
         e["impact_level"] = get_impact_level(e.get("impact_analysis", ""))
-
+    
+    # Stats
+    stats = {
+        "total": len(future_events),
+        "week": len([e for e in future_events if e.get("datetime_utc", "")[:10] <= week_str]),
+        "month": len([e for e in future_events if e.get("datetime_utc", "")[:10] <= month_str]),
+        "critical": len([e for e in future_events if e["impact_level"] == "critical"]),
+        "high": len([e for e in future_events if e["impact_level"] == "high"]),
+        "past_total": len(past_events),
+        "past_resolved": len([e for e in past_events if e.get("actual_value")]),
+        "past_pending": len([e for e in past_events if not e.get("actual_value")]),
+    }
+    
+    # Group by type
     by_type = {}
-    for e in future:
-        t = e["type"]
+    for e in future_events:
+        t = e.get("type", "Other")
         if t not in by_type:
             by_type[t] = []
         by_type[t].append(e)
-
-    stats = {
-        "total": len(future),
-        "week": len(week_events),
-        "month": len(month_list),
-        "critical": len([e for e in future if e["impact_level"] == "critical"]),
-        "high": len([e for e in future if e["impact_level"] == "high"]),
-    }
-
-    date_counter = Counter(e["date"][:10] for e in week_events)
+    
+    # Past events grouped by type
+    past_by_type = {}
+    for e in past_events:
+        t = e.get("type", "Other")
+        if t not in past_by_type:
+            past_by_type[t] = []
+        past_by_type[t].append(e)
+    
+    # Resonance
+    week_events = [e for e in future_events if e.get("datetime_utc", "")[:10] <= week_str]
+    date_counter = Counter(e.get("datetime_utc", "")[:10] for e in week_events)
     resonance_days = [(d, c) for d, c in date_counter.most_common() if c >= 2]
-
-    html = build_page(stats, by_type, resonance_days, week_events, week_str, month_str, now)
-
+    
+    html = build_page(stats, by_type, past_by_type, resonance_days, week_events, week_str, month_str, now)
+    
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(html)
-
+    
     www_path = "/data/ai/www/catalyst/index.html"
     Path(www_path).parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(output_path, www_path)
     print(f"  -> HTML: {output_path} -> {www_path}")
 
 
-def build_page(stats, by_type, resonance_days, week_events, week_str, month_str, now):
-    # Generate dynamic calendar icon with current day
+def build_page(stats, by_type, past_by_type, resonance_days, week_events, week_str, month_str, now):
     day_num = now.day
-    # Cute SVG definition
     CAL_SVG = f'<svg viewBox="0 0 32 32" width="48" height="48" xmlns="http://www.w3.org/2000/svg"><rect x="2" y="6" width="28" height="24" rx="4" fill="#6366f1"/><rect x="2" y="6" width="28" height="8" fill="#4f46e5"/><circle cx="9" cy="10" r="1.5" fill="#f43f5e"/><circle cx="23" cy="10" r="1.5" fill="#f43f5e"/><text x="16" y="25" font-family="sans-serif" font-size="14" font-weight="bold" fill="white" text-anchor="middle">{day_num}</text></svg>'
     
-    # Favicon Base64 version for Chrome
     FAV_SVG = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect x="2" y="6" width="28" height="24" rx="4" fill="#6366f1"/><rect x="2" y="6" width="28" height="8" fill="#4f46e5"/><circle cx="9" cy="10" r="1.5" fill="#f43f5e"/><circle cx="23" cy="10" r="1.5" fill="#f43f5e"/><text x="16" y="25" font-family="sans-serif" font-size="14" font-weight="bold" fill="white" text-anchor="middle">{day_num}</text></svg>'
-    import base64
     FAV_B64 = base64.b64encode(FAV_SVG.encode()).decode()
+    
+    # Resonance JSON for JS (escape closing script tags)
+    resonance_data = [{"date": d, "count": c, "events": [e for e in week_events if e.get("datetime_utc", "")[:10].startswith(d)]} for d, c in resonance_days]
+    resonance_json = json.dumps(resonance_data, ensure_ascii=False)
+    resonance_json = resonance_json.replace("</", "<\\/")
     
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -134,20 +179,45 @@ def build_page(stats, by_type, resonance_days, week_events, week_str, month_str,
                 <div class="number">{stats['high']}</div>
                 <div class="label">🟠 High</div>
             </div>
+            <div class="stat-card past-tab" onclick="switchTab('past')" id="stat-past">
+                <div class="number">{stats['past_total']}</div>
+                <div class="label">📜 History</div>
+            </div>
         </div>
 
-        {build_resonance(resonance_days, week_events)}
-
-        <div class="filters">
-            <button class="filter-btn active" onclick="filterEvents('all')">All ({stats['total']})</button>
-            {build_filter_buttons(by_type)}
+        <!-- Tab navigation -->
+        <div class="tab-nav">
+            <button class="tab-btn active" onclick="switchTab('future')" id="tab-future">📅 Upcoming Events</button>
+            <button class="tab-btn" onclick="switchTab('past')" id="tab-past">📜 Historical Review</button>
         </div>
 
-        {build_categories(by_type, week_str, month_str)}
+        <!-- Future events section -->
+        <div id="section-future">
+            {build_resonance(resonance_days, week_events)}
+
+            <div class="filters">
+                <button class="filter-btn active" onclick="filterEvents('all')">All ({stats['total']})</button>
+                {build_filter_buttons(by_type)}
+            </div>
+
+            {build_categories(by_type, week_str, month_str, "future")}
+        </div>
+
+        <!-- Past events section -->
+        <div id="section-past" style="display:none;">
+            <div class="past-filters">
+                <button class="filter-btn active" onclick="filterPast('all')">All ({stats['past_total']})</button>
+                <button class="filter-btn" onclick="filterPast('resolved')">✅ Resolved ({stats['past_resolved']})</button>
+                <button class="filter-btn" onclick="filterPast('pending')">⏳ Pending ({stats['past_pending']})</button>
+                {build_filter_buttons(past_by_type, prefix="past-")}
+            </div>
+
+            {build_past_categories(past_by_type)}
+        </div>
 
         <div class="footer">
-            <p>Catalyst Calendar v4.0 | Updates hourly | Data for reference only, not investment advice</p>
-            <p style="margin-top: 8px;"><a href="/api/v1/events" style="color: #6366f1;">API Endpoint (JSON)</a></p>
+            <p>Catalyst Calendar v5.0 | Updates hourly | Data for reference only, not investment advice</p>
+            <p style="margin-top: 8px;"><a href="/api/v1/events" style="color: #6366f1;">API Endpoint (JSON)</a> · <a href="/api/v1/events?status=resolved" style="color: #6366f1;">Resolved Events</a></p>
         </div>
     </div>
 
@@ -160,66 +230,27 @@ def build_page(stats, by_type, resonance_days, week_events, week_str, month_str,
             </div>
             <p class="modal-desc">Free public endpoint. No registration required. Returns standard JSON.</p>
 
-            <h4>Get All Events</h4>
+            <h4>Query Parameters</h4>
             <div class="curl-example">
-                <button class="copy-btn" onclick="copyCurl(this)">📋 Copy</button>
-                <code><span class="cmd">curl</span> <span class="flag">-s</span> <span class="url">https://catalyst.infodream.asia/api/v1/events</span> | <span class="cmd">python3</span> -m json.tool</code>
+                <code><span class="cmd">?status=</span><span class="url">future|resolved|pending|all</span>
+<span class="cmd">&type=</span><span class="url">FOMC</span>
+<span class="cmd">&impact=</span><span class="url">High</span>
+<span class="cmd">&keyword=</span><span class="url">CPI</span>
+<span class="cmd">&past_days=</span><span class="url">7</span></code>
             </div>
 
-            <h4>Save to File</h4>
+            <h4>Single Event Result</h4>
             <div class="curl-example">
                 <button class="copy-btn" onclick="copyCurl(this)">📋 Copy</button>
-                <code><span class="cmd">curl</span> <span class="flag">-s</span> <span class="url">https://catalyst.infodream.asia/api/v1/events</span> <span class="flag">-o</span> catalyst.json</code>
+                <code><span class="cmd">curl</span> <span class="flag">-s</span> <span class="url">https://catalyst.infodream.asia/api/v1/events/49/result</span></code>
             </div>
-
-            <h4>Health Check</h4>
-            <div class="curl-example">
-                <button class="copy-btn" onclick="copyCurl(this)">📋 Copy</button>
-                <code><span class="cmd">curl</span> <span class="flag">-s</span> <span class="url">https://catalyst.infodream.asia/api/health</span></code>
-            </div>
-
-            <h4>Python Example</h4>
-            <div class="curl-example">
-                <button class="copy-btn" onclick="copyCurl(this)">📋 Copy</button>
-                <code><span class="cmd">import</span> requests
-resp = requests.get(<span class="url">"https://catalyst.infodream.asia/api/v1/events"</span>)
-data = resp.json()
-<span class="cmd">print</span>(data[<span class="url">"stats"</span>])
-<span class="cmd">for</span> e <span class="cmd">in</span> data[<span class="url">"data"</span>]:
-    <span class="cmd">print</span>(e[<span class="url">"title"</span>], e[<span class="url">"date"</span>])</code>
-            </div>
-
-            <h4>MCP Server Config</h4>
-            <p style="color:var(--text-muted);font-size:0.85rem;margin-bottom:12px;">
-                Add to Cursor (<code>.cursor/mcp.json</code>), Claude Desktop, or any MCP client.
-                Uses FastMCP Streamable HTTP — connects directly to the live API.
-            </p>
-            <div class="curl-example">
-                <button class="copy-btn" onclick="copyCurl(this)">📋 Copy</button>
-                <code>&#123;
-  &quot;mcpServers&quot;: &#123;
-    &quot;market-catalyst&quot;: &#123;
-      &quot;url&quot;: &quot;https://catalyst.infodream.asia/mcp&quot;
-    &#125;
-  &#125;
-&#125;</code>
-            </div>
-            <p style="color:var(--text-secondary);font-size:0.8rem;margin-top:8px;">
-                <strong>5 Tools:</strong>
-                <code>get_catalyst_stats</code> (stats cards) ·
-                <code>get_resonance_days</code> (overlapping events) ·
-                <code>get_events_by_type</code> (category filter) ·
-                <code>get_catalyst_events</code> (full list) ·
-                <code>search_catalyst_events</code> (keyword search)
-            </p>
 
             <div class="api-info">
                 <ul>
-                    <li><span class="tag">GET</span> <code>/api/v1/events</code> — All future catalyst events</li>
+                    <li><span class="tag">GET</span> <code>/api/v1/events</code> — Events with optional filters</li>
+                    <li><span class="tag">GET</span> <code>/api/v1/events/&#123;id&#125;/result</code> — Single event result details</li>
                     <li><span class="tag">GET</span> <code>/api/health</code> — Service health check</li>
                     <li><span class="tag">Rate Limit</span> Max 100 requests/hour per IP</li>
-                    <li><span class="tag">Format</span> JSON with stats + data + meta</li>
-                    <li><span class="tag">Refresh</span> Data updates automatically every hour</li>
                 </ul>
             </div>
         </div>
@@ -237,6 +268,7 @@ data = resp.json()
     </div>
 
     <script>{JAVASCRIPT}</script>
+    <script>window.__resonanceData = {resonance_json};</script>
 </body>
 </html>"""
 
@@ -245,59 +277,134 @@ def build_resonance(resonance_days, week_events):
     if not resonance_days:
         return ""
     days_html = ""
-    resonance_data = []
     for date_str, count in resonance_days:
-        evts = [e for e in week_events if e["date"].startswith(date_str)]
+        evts = [e for e in week_events if e.get("datetime_utc", "")[:10].startswith(date_str)]
         preview = " · ".join([e["title"][:40] for e in evts[:3]])
-        resonance_data.append({"date": date_str, "count": count, "events": evts})
         days_html += f"""<div class="resonance-day" onclick="showResonanceModal('{date_str}')">
             <div class="date">{date_str}</div>
             <div class="count">{count} events overlapping</div>
             <div class="preview">{preview}</div>
             <div class="resonance-hint">Click for details &rarr;</div>
         </div>"""
-    # Store resonance data for JS
-    resonance_json = json.dumps(resonance_data, ensure_ascii=False).replace('</', '<\\/')
     return f"""<div class="resonance">
         <h2>⚠️ Next 7 Days — Resonance (Multiple Events Overlapping)</h2>
         <div class="resonance-grid">{days_html}</div>
-    </div>
-    <script>window.__resonanceData = {resonance_json};</script>"""
+    </div>"""
 
 
-def build_filter_buttons(by_type):
+def build_filter_buttons(by_type, prefix=""):
     buttons = ""
     for t, items in by_type.items():
         icon = TYPE_ICONS.get(t, "📌")
-        buttons += f'<button class="filter-btn" onclick="filterEvents(\'{t}\')">{icon} {t} ({len(items)})</button>'
+        buttons += f'<button class="filter-btn" onclick="filterEvents(\'{prefix}{t}\')">{icon} {t} ({len(items)})</button>'
     return buttons
 
 
-def build_categories(by_type, week_str, month_str):
-    html = ""
-    for t, events in sorted(by_type.items()):
-        icon = TYPE_ICONS.get(t, "📌")
-        events_html = ""
-        for e in sorted(events, key=lambda x: x["date"]):
-            date_part = e["date"][:10]
-            time_part = e["date"][11:16] if len(e["date"]) > 11 else ""
-            level = e.get("impact_level", "low")
-            events_html += f"""
-            <div class="event {level}" data-type="{t}" data-date="{date_part}">
+def format_event_date(e):
+    """Extract date/time/weekday from event"""
+    date_str = e.get("datetime_utc", "")
+    date_part = date_str[:10] if len(date_str) >= 10 else "--"
+    
+    if len(date_str) >= 19:
+        time_part = date_str[11:19]
+    elif len(date_str) >= 16:
+        time_part = date_str[11:16]
+    else:
+        time_part = ""
+    
+    weekday = e.get("weekday_en", "")
+    return date_part, time_part, weekday
+
+
+def build_event_card(e, show_result=False):
+    """Build a single event card HTML"""
+    date_part, time_part, weekday = format_event_date(e)
+    level = e.get("impact_level", "low")
+    event_type = e.get("type", "Other")
+    
+    # Result badge
+    result_badge = ""
+    actual = e.get("actual_value")
+    if actual:
+        if actual == "AUTO_RESOLVE_FAILED":
+            result_badge = '<div class="result-badge failed">⚠️ Pending manual review</div>'
+        else:
+            status = e.get("result_status", "")
+            status_icon = {"better": "📈", "worse": "📉", "as_expected": "✅", "neutral": "➡️"}.get(status, "📊")
+            summary = e.get("result_summary", "")
+            result_badge = f'<div class="result-badge resolved">{status_icon} Actual: <strong>{actual}</strong>'
+            if summary:
+                result_badge += f' — {summary}'
+            result_badge += '</div>'
+            
+            # Expandable notes
+            notes = e.get("news_notes")
+            if notes:
+                notes_id = f"notes-{e.get('id', 'x')}"
+                result_badge += f'<div class="result-notes-toggle" onclick="toggleNotes(\'{notes_id}\')">📝 Show details</div>'
+                result_badge += f'<div class="result-notes" id="{notes_id}" style="display:none">{notes.replace(chr(10), "<br>")}</div>'
+    
+    # Estimate/Previous info
+    estimate_info = ""
+    if e.get("estimate"):
+        estimate_info = f'<div class="estimate-info">Estimate: {e["estimate"]} {e.get("unit", "") or ""}'
+        if e.get("previous"):
+            estimate_info += f' | Previous: {e["previous"]}'
+        estimate_info += '</div>'
+    
+    card_class = f"event {level}"
+    if actual and actual != "AUTO_RESOLVE_FAILED":
+        card_class += " event-resolved"
+    
+    return f"""
+            <div class="{card_class}" data-type="{event_type}" data-date="{date_part}" data-status="{"resolved" if actual else "pending"}">
                 <div class="event-date">
-                    <div class="day">{date_part[8:10]}</div>
+                    <div class="day">{date_part[8:10] if len(date_part) >= 10 and date_part[8:10] != "--" else '--'}</div>
                     <div class="month">{date_part[5:7]}/{date_part[:4]}</div>
+                    {f'<div class="weekday">{weekday}</div>' if weekday else ""}
                     <div class="time">{time_part}</div>
                 </div>
                 <div class="event-content">
                     <h3>{e['title']}</h3>
-                    <div class="impact">{e['impact_analysis'][:140]}{'...' if len(e['impact_analysis']) > 140 else ''}</div>
-                    <span class="asset">{e['asset_impact']}</span>
+                    <div class="impact">{e.get('impact_analysis', '')[:140]}{'...' if len(e.get('impact_analysis', '') or '') > 140 else ''}</div>
+                    <span class="asset">{e.get('asset_impact', '')}</span>
+                    {estimate_info}
+                    {result_badge}
                 </div>
                 <span class="impact-badge {level}">{level.upper()}</span>
             </div>"""
 
+
+def build_categories(by_type, week_str, month_str, section="future"):
+    html = ""
+    for t, events in sorted(by_type.items()):
+        icon = TYPE_ICONS.get(t, "📌")
+        events_html = ""
+        for e in sorted(events, key=lambda x: x.get("datetime_utc", "")):
+            events_html += build_event_card(e)
+        
+        prefix = "past-" if section == "past" else ""
         html += f"""<div class="category" data-type="{t}">
+            <div class="category-header" onclick="toggleCategory(this)">
+                <h2>{icon} {t}</h2>
+                <span class="count">{len(events)} events</span>
+                <span class="collapse-icon">▼</span>
+            </div>
+            <div class="category-content">{events_html}</div>
+        </div>"""
+    return html
+
+
+def build_past_categories(past_by_type):
+    """Build past events section with result display"""
+    html = ""
+    for t, events in sorted(past_by_type.items()):
+        icon = TYPE_ICONS.get(t, "📌")
+        events_html = ""
+        for e in sorted(events, key=lambda x: x.get("datetime_utc", ""), reverse=True):
+            events_html += build_event_card(e, show_result=True)
+        
+        html += f"""<div class="category" data-type="past-{t}">
             <div class="category-header" onclick="toggleCategory(this)">
                 <h2>{icon} {t}</h2>
                 <span class="count">{len(events)} events</span>
@@ -319,6 +426,8 @@ CSS = r"""
     --medium: #eab308; --medium-bg: rgba(234,179,8,0.1);
     --low: #22c55e; --low-bg: rgba(34,197,94,0.1);
     --accent: #6366f1; --accent-bg: rgba(99,102,241,0.1);
+    --resolved: #10b981; --resolved-bg: rgba(16,185,129,0.1);
+    --pending: #6b7280; --pending-bg: rgba(107,114,128,0.1);
 }
 body { background: var(--bg-primary); color: var(--text-primary); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; }
 .topbar { position: fixed; top: 0; left: 0; right: 0; display: flex; justify-content: flex-end; align-items: center; padding: 8px 16px; background: rgba(10,10,15,0.8); backdrop-filter: blur(12px); z-index: 100; border-bottom: 1px solid var(--border); }
@@ -342,6 +451,14 @@ body { background: var(--bg-primary); color: var(--text-primary); font-family: -
 .stat-card .label { color: var(--text-secondary); font-size: 0.875rem; margin-top: 4px; }
 .stat-card.critical .number { color: var(--critical); }
 .stat-card.high .number { color: var(--high); }
+.stat-card.past-tab .number { color: var(--text-secondary); }
+
+/* Tab navigation */
+.tab-nav { display: flex; gap: 8px; margin-bottom: 24px; border-bottom: 1px solid var(--border); padding-bottom: 12px; }
+.tab-btn { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 10px 20px; color: var(--text-secondary); cursor: pointer; font-size: 0.95rem; transition: all 0.2s; font-weight: 500; }
+.tab-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.tab-btn.active { background: var(--accent-bg); border-color: var(--accent); color: #818cf8; }
+
 .resonance { background: var(--critical-bg); border: 1px solid var(--critical); border-radius: 12px; padding: 20px; margin-bottom: 32px; }
 .resonance h2 { color: var(--critical); font-size: 1.25rem; margin-bottom: 12px; }
 .resonance-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
@@ -358,10 +475,7 @@ body { background: var(--bg-primary); color: var(--text-primary); font-family: -
 .resonance-day .preview { font-size: 0.75rem; color: var(--text-muted); margin-top: 4px; }
 .resonance-hint { font-size: 0.65rem; color: var(--critical); margin-top: 6px; opacity: 0; transition: opacity 0.2s; }
 .resonance-day:hover .resonance-hint { opacity: 1; }
-.resonance-day .date { font-weight: 600; color: var(--critical); }
-.resonance-day .count { color: var(--text-secondary); font-size: 0.875rem; }
-.resonance-day .preview { font-size: 0.75rem; color: var(--text-muted); margin-top: 4px; }
-.filters { display: flex; gap: 8px; margin-bottom: 24px; flex-wrap: wrap; }
+.filters, .past-filters { display: flex; gap: 8px; margin-bottom: 24px; flex-wrap: wrap; }
 .filter-btn { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 8px 16px; color: var(--text-primary); cursor: pointer; font-size: 0.875rem; transition: all 0.2s; }
 .filter-btn:hover, .filter-btn.active { background: var(--accent-bg); border-color: var(--accent); color: #818cf8; }
 .category { margin-bottom: 16px; }
@@ -380,13 +494,22 @@ body { background: var(--bg-primary); color: var(--text-primary); font-family: -
 .event.high { border-left: 3px solid var(--high); }
 .event.medium { border-left: 3px solid var(--medium); }
 .event.low { border-left: 3px solid var(--low); }
+.event.event-resolved { border-left: 3px solid var(--resolved); }
 .event-date { text-align: center; min-width: 70px; }
 .event-date .day { font-size: 1.5rem; font-weight: 700; line-height: 1; }
 .event-date .month { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; }
 .event-date .time { font-size: 0.875rem; color: var(--text-secondary); margin-top: 4px; }
+.event-date .weekday { font-size: 0.7rem; color: var(--accent); margin-top: 2px; font-weight: 600; }
 .event-content h3 { font-size: 1rem; font-weight: 600; margin-bottom: 8px; }
 .event-content .impact { color: var(--text-secondary); font-size: 0.875rem; margin-bottom: 8px; }
 .event-content .asset { display: inline-block; background: var(--accent-bg); color: #818cf8; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; }
+.estimate-info { color: var(--text-muted); font-size: 0.8rem; margin-top: 6px; }
+.result-badge { margin-top: 8px; padding: 6px 10px; border-radius: 6px; font-size: 0.85rem; }
+.result-badge.resolved { background: var(--resolved-bg); color: var(--resolved); border: 1px solid rgba(16,185,129,0.3); }
+.result-badge.failed { background: var(--pending-bg); color: var(--pending); border: 1px solid rgba(107,114,128,0.3); }
+.result-notes-toggle { cursor: pointer; color: var(--accent); font-size: 0.8rem; margin-top: 4px; }
+.result-notes-toggle:hover { text-decoration: underline; }
+.result-notes { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; padding: 10px; margin-top: 6px; font-size: 0.8rem; color: var(--text-secondary); line-height: 1.6; }
 .impact-badge { padding: 6px 12px; border-radius: 20px; font-size: 0.75rem; font-weight: 600; white-space: nowrap; }
 .impact-badge.critical { background: var(--critical-bg); color: var(--critical); }
 .impact-badge.high { background: var(--high-bg); color: var(--high); }
@@ -435,7 +558,7 @@ function showResonanceModal(dateStr) {
         return `<div class="resonance-event-item">
             <h4>${e.title}</h4>
             <div class="meta">
-                <span>📅 ${e.date}</span>
+                <span>📅 ${e.datetime_utc?.substring(0,10) || e.date}</span>
                 <span>📁 ${e.type}</span>
                 <span>🎯 ${e.asset_impact}</span>
             </div>
@@ -445,13 +568,30 @@ function showResonanceModal(dateStr) {
     }).join('');
     toggleResonanceModal();
 }
+function toggleNotes(id) {
+    const el = document.getElementById(id);
+    if (el.style.display === 'none') {
+        el.style.display = 'block';
+        el.previousElementSibling.textContent = '📝 Hide details';
+    } else {
+        el.style.display = 'none';
+        el.previousElementSibling.textContent = '📝 Show details';
+    }
+}
+function switchTab(tab) {
+    document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+    document.querySelectorAll('.stat-card').forEach(card => card.classList.remove('active'));
+    const tabEl = document.getElementById('tab-' + tab);
+    const statEl = document.getElementById('stat-' + (tab === 'future' ? 'all' : 'past'));
+    if (tabEl) tabEl.classList.add('active');
+    if (statEl) statEl.classList.add('active');
+    document.getElementById('section-future').style.display = tab === 'future' ? 'block' : 'none';
+    document.getElementById('section-past').style.display = tab === 'past' ? 'block' : 'none';
+}
 // Visit tracking
 (function() {
-    // Only track unique sessions (prevents F5 spam)
     if (!sessionStorage.getItem('catalyst_visited')) {
-        // Bot check
         if (navigator.webdriver || navigator.languages === undefined) return;
-        
         fetch('/api/track-visit')
             .then(r => r.json())
             .then(d => {
@@ -462,8 +602,8 @@ function showResonanceModal(dateStr) {
                 fetch('/api/stats')
                     .then(r => r.json())
                     .then(d => {
-                        document.getElementById('visitCount').textContent = d.visits?.toLocaleString() || '0';
-                        document.getElementById('apiCount').textContent = d.api_calls?.toLocaleString() || '0';
+                        document.getElementById('visitCount').textContent = d.web?.visits?.toLocaleString() || d.visits?.toLocaleString() || '0';
+                        document.getElementById('apiCount').textContent = d.web?.api_calls?.toLocaleString() || d.api_calls?.toLocaleString() || '0';
                     })
                     .catch(() => {
                         document.getElementById('visitCount').textContent = '--';
@@ -472,12 +612,11 @@ function showResonanceModal(dateStr) {
             });
         sessionStorage.setItem('catalyst_visited', '1');
     } else {
-        // Just display current stats without incrementing
         fetch('/api/stats')
             .then(r => r.json())
             .then(d => {
-                document.getElementById('visitCount').textContent = d.visits?.toLocaleString() || '0';
-                document.getElementById('apiCount').textContent = d.api_calls?.toLocaleString() || '0';
+                document.getElementById('visitCount').textContent = d.web?.visits?.toLocaleString() || d.visits?.toLocaleString() || '0';
+                document.getElementById('apiCount').textContent = d.web?.api_calls?.toLocaleString() || d.api_calls?.toLocaleString() || '0';
             }).catch(() => {});
     }
 })();
@@ -495,18 +634,10 @@ const weekStr = weekDate.toISOString().split('T')[0];
 const monthDate = new Date(); monthDate.setMonth(monthDate.getMonth() + 1);
 const monthStr = monthDate.toISOString().split('T')[0];
 function filterEvents(type) {
-    document.querySelectorAll('.stat-card').forEach(card => card.classList.remove('active'));
-    const el = document.getElementById('stat-' + type);
-    if (el) el.classList.add('active');
+    switchTab('future');
     document.querySelectorAll('.filter-btn').forEach(btn => btn.classList.remove('active'));
-    document.querySelectorAll('.filter-btn').forEach(btn => {
-        const t = btn.textContent;
-        if (type === 'all' && t.startsWith('All')) btn.classList.add('active');
-        else if (type !== 'all' && type !== 'week' && type !== 'month' && type !== 'critical' && type !== 'high') {
-            if (t.includes(type)) btn.classList.add('active');
-        }
-    });
-    document.querySelectorAll('.event').forEach(event => {
+    event?.target?.classList?.add('active');
+    document.querySelectorAll('#section-future .event').forEach(event => {
         const level = event.classList.contains('critical') ? 'critical' : event.classList.contains('high') ? 'high' : event.classList.contains('medium') ? 'medium' : 'low';
         const dateStr = event.getAttribute('data-date');
         let show = false;
@@ -518,7 +649,26 @@ function filterEvents(type) {
         else show = event.closest('.category')?.dataset.type === type;
         event.style.display = show ? 'grid' : 'none';
     });
-    document.querySelectorAll('.category').forEach(cat => {
+    document.querySelectorAll('#section-future .category').forEach(cat => {
+        let hasVisible = false;
+        cat.querySelectorAll('.event').forEach(ev => { if (ev.style.display !== 'none') hasVisible = true; });
+        cat.style.display = hasVisible ? 'block' : 'none';
+    });
+}
+function filterPast(type) {
+    document.querySelectorAll('.past-filters .filter-btn').forEach(btn => btn.classList.remove('active'));
+    event?.target?.classList?.add('active');
+    document.querySelectorAll('#section-past .event').forEach(event => {
+        const status = event.getAttribute('data-status');
+        const catType = event.closest('.category')?.dataset.type || '';
+        let show = false;
+        if (type === 'all') show = true;
+        else if (type === 'resolved') show = status === 'resolved';
+        else if (type === 'pending') show = status === 'pending';
+        else show = catType === 'past-' + type;
+        event.style.display = show ? 'grid' : 'none';
+    });
+    document.querySelectorAll('#section-past .category').forEach(cat => {
         let hasVisible = false;
         cat.querySelectorAll('.event').forEach(ev => { if (ev.style.display !== 'none') hasVisible = true; });
         cat.style.display = hasVisible ? 'block' : 'none';
@@ -528,15 +678,9 @@ function filterEvents(type) {
 
 
 def main():
-    json_file = "/data/ai/tmp/catalyst_events.json"
     html_file = "/data/ai/tmp/catalyst.html"
-    if not os.path.exists(json_file):
-        print("[ERROR] Data file not found")
-        return
-    with open(json_file) as f:
-        events = json.load(f)
-    print(f"Loading {len(events)} events, generating HTML...")
-    generate_html(events, html_file)
+    print("Loading events from SQLite, generating HTML...")
+    generate_html(html_file)
     print(f"✅ Done: {html_file}")
 
 

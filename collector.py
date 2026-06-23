@@ -80,7 +80,15 @@ def fetch_economic_calendar():
             impact_raw = e.get("impact", "low")
             estimate = e.get("estimate")
             prev = e.get("previous")
-            time_str = e.get("time", "")[:16].replace(" ", "T") if e.get("time") else ""
+            time_str = e.get("time", "")
+            # Normalize time to YYYY-MM-DD HH:MM:SS if available
+            if time_str:
+                # Finnhub returns like "2026-06-23 12:30:00" or "2026-06-23 12:30"
+                time_str = time_str.replace("T", " ").strip()
+                if len(time_str) <= 10:  # Just date, add time
+                    time_str += " 00:00:00"
+                elif len(time_str) <= 16:  # No seconds
+                    time_str += ":00"
             
             # Determine impact level
             kw_critical = ["interest rate", "fomc", "federal funds", "nonfarm", "non-farm", "federal open"]
@@ -115,7 +123,7 @@ def fetch_economic_calendar():
             
             events.append({
                 "title": event_name,
-                "date": time_str if time_str else e.get("time", "")[:16],
+                "date": time_str if time_str else e.get("time", ""),
                 "type": "Macro - Economic Data",
                 "source": "Finnhub",
                 "source_url": "https://finnhub.io",
@@ -171,7 +179,7 @@ def fetch_earnings_calendar():
                 
                 events.append({
                     "title": f"{symbol} Q2 Earnings",
-                    "date": e.get("date", "") + " 00:00",
+                    "date": e.get("date", "") + " 00:00:00",
                     "type": "US Equities - Earnings",
                     "source": "Finnhub",
                     "source_url": f"https://finance.yahoo.com/quote/{symbol}",
@@ -209,7 +217,7 @@ def fetch_ipo_calendar():
             if name and exchange:
                 events.append({
                     "title": f"IPO: {name} on {exchange}",
-                    "date": e.get("date", "") + " 00:00",
+                    "date": e.get("date", "") + " 00:00:00",
                     "type": "US Equities - IPO",
                     "source": "Finnhub",
                     "source_url": "https://finnhub.io",
@@ -221,7 +229,7 @@ def fetch_ipo_calendar():
     
     return events
 
-def output_local(events):
+def output_local(events, json_events=None):
     output_file = "/data/ai/tmp/catalyst_events.json"
     md_file = "/data/ai/tmp/catalyst_events.md"
     Path(output_file).parent.mkdir(parents=True, exist_ok=True)
@@ -251,6 +259,13 @@ def output_local(events):
 
     with open(output_file, "w") as f:
         json.dump(existing, f, ensure_ascii=False, indent=2)
+
+    # Also write to SQLite
+    if json_events:
+        from catalyst_db import insert_events, init_db
+        init_db()
+        new_count = insert_events(json_events)
+        print(f"  -> SQLite: {new_count} new events inserted")
 
     # MD summary
     with open(md_file, "w") as f:
@@ -310,7 +325,7 @@ def main():
     types = Counter(e["type"] for e in all_events)
     print(f"  -> By type: {dict(types)}")
     
-    output_local(new_events)
+    output_local(new_events, all_events)
     print(f"  -> Saved to /data/ai/tmp/catalyst_events.json")
     
     # Increment API call counter in stats
