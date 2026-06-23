@@ -142,10 +142,12 @@ class CatalystAPIHandler(BaseHTTPRequestHandler):
             self.handle_events(client_ip, params)
             stats_tracker.increment_api_call()
         elif path.startswith("/api/v1/events/"):
+            # Single event result lookup: /api/v1/events/{id}/result
             parts = path.split("/")
-            if len(parts) == 5 and parts[4] == "result":
+            # parts: ['', 'api', 'v1', 'events', '{id}', 'result'] -> length 6
+            if len(parts) == 6 and parts[5] == "result":
                 try:
-                    event_id = int(parts[3])
+                    event_id = int(parts[4])
                     self.handle_event_result(client_ip, event_id)
                 except ValueError:
                     self.send_json({"error": "Invalid event ID"}, 400)
