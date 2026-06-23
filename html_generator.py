@@ -225,32 +225,79 @@ def build_page(stats, by_type, past_by_type, resonance_days, week_events, week_s
     <div class="modal-overlay" id="apiModal" onclick="if(event.target===this)toggleApiModal()">
         <div class="modal">
             <div class="modal-header">
-                <h3>🔌 Catalyst Calendar API</h3>
+                <h3>🔌 Catalyst Calendar API & MCP</h3>
                 <button class="modal-close" onclick="toggleApiModal()">&times;</button>
             </div>
-            <p class="modal-desc">Free public endpoint. No registration required. Returns standard JSON.</p>
+            <p class="modal-desc">Free public endpoint. No registration required. Returns standard JSON. Also available as MCP Server.</p>
+
+            <h4>1. Get All Events (Default: Future)</h4>
+            <div class="curl-example">
+                <button class="copy-btn" onclick="copyCurl(this)">📋 Copy</button>
+                <code><span class="cmd">curl</span> <span class="flag">-s</span> <span class="url">https://catalyst.infodream.asia/api/v1/events</span> | <span class="cmd">python3</span> -m json.tool</code>
+            </div>
+
+            <h4>2. Query History & Results</h4>
+            <div class="curl-example">
+                <button class="copy-btn" onclick="copyCurl(this)">📋 Copy</button>
+                <code><span class="cmd">curl</span> <span class="flag">-s</span> <span class="url">"https://catalyst.infodream.asia/api/v1/events?status=resolved&limit=10"</span></code>
+            </div>
+
+            <h4>3. Single Event Detail (Result/Notes)</h4>
+            <div class="curl-example">
+                <button class="copy-btn" onclick="copyCurl(this)">📋 Copy</button>
+                <code><span class="cmd">curl</span> <span class="flag">-s</span> <span class="url">https://catalyst.infodream.asia/api/v1/events/10/result</span></code>
+            </div>
 
             <h4>Query Parameters</h4>
             <div class="curl-example">
                 <code><span class="cmd">?status=</span><span class="url">future|resolved|pending|all</span>
-<span class="cmd">&type=</span><span class="url">FOMC</span>
+<span class="cmd">&type=</span><span class="url">Macro%20-%20Economic%20Data</span>
 <span class="cmd">&impact=</span><span class="url">High</span>
 <span class="cmd">&keyword=</span><span class="url">CPI</span>
 <span class="cmd">&past_days=</span><span class="url">7</span></code>
             </div>
 
-            <h4>Single Event Result</h4>
+            <h4>Python Example</h4>
             <div class="curl-example">
                 <button class="copy-btn" onclick="copyCurl(this)">📋 Copy</button>
-                <code><span class="cmd">curl</span> <span class="flag">-s</span> <span class="url">https://catalyst.infodream.asia/api/v1/events/49/result</span></code>
+                <code><span class="cmd">import</span> requests
+resp = requests.get(<span class="url">"https://catalyst.infodream.asia/api/v1/events?status=resolved"</span>)
+data = resp.json()
+<span class="cmd">for</span> e <span class="cmd">in</span> data[<span class="url">"data"</span>]:
+    <span class="cmd">print</span>(e[<span class="url">"title"</span>], e.get(<span class="url">"actual_value"</span>))</code>
             </div>
+
+            <h4>🤖 MCP Server Config</h4>
+            <p style="color:var(--text-muted);font-size:0.85rem;margin-bottom:12px;">
+                Add this to Cursor (<code>.cursor/mcp.json</code>) or Claude Desktop (<code>claude_desktop_config.json</code>).
+                Connects to the live API via SSE transport.
+            </p>
+            <div class="curl-example">
+                <button class="copy-btn" onclick="copyCurl(this)">📋 Copy</button>
+                <code>&#123;
+  "mcpServers": &#123;
+    "market-catalyst": &#123;
+      "url": "https://catalyst.infodream.asia/mcp/sse"
+    &#125;
+  &#125;
+&#125;</code>
+            </div>
+            <p style="color:var(--text-secondary);font-size:0.8rem;margin-top:8px;">
+                <strong>Available Tools:</strong>
+                <code>get_catalyst_stats</code> ·
+                <code>get_resonance_days</code> ·
+                <code>get_events_by_type</code> ·
+                <code>get_catalyst_events</code> ·
+                <code>search_catalyst_events</code> ·
+                <code>get_event_result</code> (New!)
+            </p>
 
             <div class="api-info">
                 <ul>
-                    <li><span class="tag">GET</span> <code>/api/v1/events</code> — Events with optional filters</li>
-                    <li><span class="tag">GET</span> <code>/api/v1/events/&#123;id&#125;/result</code> — Single event result details</li>
-                    <li><span class="tag">GET</span> <code>/api/health</code> — Service health check</li>
-                    <li><span class="tag">Rate Limit</span> Max 100 requests/hour per IP</li>
+                    <li><span class="tag">GET</span> <code>/api/v1/events</code> — List events (Filter by status, type, keyword)</li>
+                    <li><span class="tag">GET</span> <code>/api/v1/events/{id}/result</code> — Get single event details</li>
+                    <li><span class="tag">GET</span> <code>/api/health</code> — Service status</li>
+                    <li><span class="tag">Rate Limit</span> 100 requests/hour per IP</li>
                 </ul>
             </div>
         </div>
