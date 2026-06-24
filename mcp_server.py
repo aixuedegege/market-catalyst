@@ -30,7 +30,14 @@ try:
     from catalyst_db import get_stats as get_db_stats, query_events
     HAS_DB = True
 except ImportError:
-    HAS_DB = False
+    # Try workspace config
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    try:
+        from config import DB_PATH
+        from catalyst_db import get_stats as get_db_stats, query_events
+        HAS_DB = True
+    except ImportError:
+        HAS_DB = False
 
 # Fallback to JSON if DB not available
 DATA_FILE = "/data/ai/tmp/catalyst_events.json"

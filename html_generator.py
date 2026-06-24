@@ -13,7 +13,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from collections import Counter
 
-DB_PATH = "/data/ai/tmp/catalyst.db"
+from config import load_env, DB_PATH
+load_env()
 TYPE_ICONS = {
     "Political - Trump Policy": "🇺🇸",
     "Macro - Economic Data": "📈",

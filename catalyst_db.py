@@ -12,7 +12,8 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
 
-DB_PATH = "/data/ai/tmp/catalyst.db"
+# Import Config
+from config import DB_PATH, load_env
 
 WEEKDAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
@@ -304,14 +305,16 @@ def import_from_json(json_path: str, db_path: str = DB_PATH) -> int:
     return insert_events(events, db_path)
 
 if __name__ == "__main__":
-    import sys
-    
+    load_env()
     init_db()
     print("[+] 数据库初始化完成:", DB_PATH)
     
-    # Import existing data
-    imported = import_from_json("/data/ai/tmp/catalyst_events.json")
-    print(f"[+] 从 JSON 导入 {imported} 条事件")
+    # Import existing data if any
+    # We might not have json events anymore, but keeping for legacy
+    from config import JSON_DATA_FILE
+    imported = import_from_json(JSON_DATA_FILE)
+    if imported:
+        print(f"[+] 从 JSON 导入 {imported} 条事件")
     
     # Show stats
     stats = get_stats()

@@ -20,9 +20,14 @@ try:
     from catalyst_db import get_stats as get_db_stats, query_events, init_db, DB_PATH
     HAS_DB = True
 except ImportError:
-    HAS_DB = False
-    print("[WARN] SQLite backend not found. Falling back to JSON mode.")
-    DATA_FILE = "/data/ai/tmp/catalyst_events.json"
+    # Try workspace config
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    try:
+        from config import DB_PATH
+        from catalyst_db import get_stats as get_db_stats, query_events, init_db
+        HAS_DB = True
+    except ImportError:
+        HAS_DB = False
 
 STATS_FILE = "/data/ai/www/catalyst/stats.json"
 

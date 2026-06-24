@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Catalyst Calendar Data Collector v4
+Catalyst Calendar Data Collector v5
 All data from REAL APIs — zero mock data.
 Sources: Finnhub API (economic calendar + earnings)
 """
@@ -14,8 +14,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from collections import Counter
 
-FINNHUB_API_KEY = "d8jofn9r01qh6g3rijv0d8jofn9r01qh6g3rijvg"
-DEDUP_FILE = "/tmp/catalyst_dedup.json"
+from config import load_env, DB_PATH, JSON_DATA_FILE, STATS_FILE
+
+load_env()
+
+FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "d8jofn...ijvg")
+DEDUP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dedup.json")
 
 def load_dedup_set():
     if os.path.exists(DEDUP_FILE):
@@ -230,8 +234,8 @@ def fetch_ipo_calendar():
     return events
 
 def output_local(events, json_events=None):
-    output_file = "/data/ai/tmp/catalyst_events.json"
-    md_file = "/data/ai/tmp/catalyst_events.md"
+    output_file = JSON_DATA_FILE
+    md_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "catalyst_events.md")
     Path(output_file).parent.mkdir(parents=True, exist_ok=True)
 
     existing = []
@@ -326,7 +330,7 @@ def main():
     print(f"  -> By type: {dict(types)}")
     
     output_local(new_events, all_events)
-    print(f"  -> Saved to /data/ai/tmp/catalyst_events.json")
+    print(f"  -> Saved to {JSON_DATA_FILE}")
     
     # Increment API call counter in stats
     try:
@@ -336,7 +340,8 @@ def main():
         pass
     
     # Generate HTML
-    os.system("python3 /data/ai/tmp/catalyst_html.py 2>&1 | tail -1")
+    html_gen = os.path.join(os.path.dirname(os.path.abspath(__file__)), "html_generator.py")
+    os.system(f"python3 {html_gen} 2>&1 | tail -1")
     print("[Done]")
 
 if __name__ == "__main__":
